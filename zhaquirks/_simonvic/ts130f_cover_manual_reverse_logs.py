@@ -4,7 +4,7 @@ import zigpy.types as t
 from zigpy.typing import UNDEFINED, UndefinedType
 
 from zigpy.zcl.clusters.closures import WindowCovering
-from zigpy.zcl import foundation
+from zigpy.zcl import foundation, AttributeReadEvent, AttributeReportedEvent, AttributeUpdatedEvent
 from zigpy.zcl.foundation import ZCLAttributeDef
 from zigpy.quirks import CustomCluster
 from zigpy.quirks.v2 import SensorDeviceClass
@@ -59,6 +59,38 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
             type=t.uint16_t,
         )
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.on_event(
+            AttributeReadEvent.event_type,
+            self._log_on_event
+        )
+        self.on_event(
+            AttributeReportedEvent.event_type,
+            self._handle_on_report_event
+        )
+        self.on_event(
+            AttributeUpdatedEvent.event_type,
+            self._log_on_event
+        )
+
+    def _log_on_event(
+        self,
+        event: AttributeReadEvent | AttributeReportedEvent | AttributeUpdatedEvent
+    ) -> None:
+        self.debug(f"[simonvic] on_event() event={event}")
+
+    def _handle_on_report_event(
+        self,
+        event: AttributeReportedEvent
+    ) -> None:
+        self.debug(f"[simonvic] on_event() event={event}")
+        if event.attribute_id == CURRENT_LIFT_PERC_ATTR_ID:
+            self._update_attribute(
+                CURRENT_LIFT_PERC_ATTR_ID,
+                100 - event.value
+            )
+
     async def read_attributes_raw(
         self,
         attributes,
@@ -67,43 +99,55 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
     ):
         """
         When we try to read the current_position_lift_percentage from the
-        device, if a cached value is present, which is supposedly correct (but
-        still inverted) since it has been previously updated when the device
-        reported it e.g. during a movement, it is written back to the device.
+        device, we invert the result and write back the value to the device.
         """
         self.debug(
             f"[simonvic] read_attributes_raw() attributes={attributes} manufacturer={manufacturer}")
         self.debug(
-            f"[simonvic] \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
+            f"[simonvic] read_attributes_raw() \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
         read_records = await super().read_attributes_raw(attributes, manufacturer, **kwargs)
         self.debug(
-            f"[simonvic] \t read_records={read_records}")
+            f"[simonvic] read_attributes_raw() \t read_records={read_records}")
         self.debug(
-            f"[simonvic] \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
+            f"[simonvic] read_attributes_raw() \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
         for record in read_records.status_records:
             if record.attrid == CURRENT_LIFT_PERC_ATTR_ID:
-                self.debug("[simonvic] \t CURRENT_LIFT_PERC_ATTR_ID found")
+                self.debug(
+                    "[simonvic] read_attributes_raw() \t CURRENT_LIFT_PERC_ATTR_ID found")
+                self.debug(
+                    f"[simonvic] read_attributes_raw() \t read {record.value.value} but inverting it to {100 - record.value.value}")
                 cached_value = self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)
                 if cached_value is None:
+                    # If we don't have a cached value, we can only return the
+                    # value (inverted) read from the device (hoping it is not
+                    # stale)
                     self.debug(
-                        "[simonvic] \t\t cache miss. Returning remote value")
+                        f"[simonvic] read_attributes_raw() \t\t cache miss. Returning inverted remote value 100 - {record.value.value} = {100 - record.value.value}")
+                    record.value.value = 100 - record.value.value
                 else:
-                    self.debug(f"[simonvic] \t\t cache hit {cached_value}")
-                    if record.value.value != 100 - cached_value:
+                    self.debug(
+                        f"[simonvic] read_attributes_raw() \t\t cache hit {cached_value}")
+                    if record.value.value != (100 - cached_value):
                         self.debug(
-                            f"[simonvic] \t\t record.value.value {record.value.value} != {100 - cached_value} 100 - cached_value")
+                            f"[simonvic] read_attributes_raw() \t\t\t record.value.value {record.value.value} != {100 - cached_value} 100 - cached_value")
                         self.debug(
-                            f"[simonvic] \t\t Writing 100 - {cached_value} = {100 - cached_value} to remote")
-                        write_result = await self.write_attributes({
-                            "current_position_lift_percentage": 100 - cached_value
-                        })  # TODO: pass manufacturer?
-                        # TODO: invoking write_attributes causes _update_attributes to be invoked twice; eventually replace with a lower level write
-                        self.debug(f"[simonvic] \t\t\twrite_result={
-                                   write_result}")
-                        self.debug(f"[simonvic] \t\t\tUpdating read record.value.value from {
-                                   record.value.value} to cached_value {cached_value}")
-                        record.value.value = cached_value
+                            f"[simonvic] read_attributes_raw() \t\t\t Writing 100 - {cached_value} = {100 - cached_value} to remote")
+                        write_result = await self.write_attributes(
+                            attributes={
+                                "current_position_lift_percentage": 100 - cached_value
+                            },
+                            update_cache=False,
+                            manufacturer=manufacturer,
+                        )
+                        self.debug(
+                            f"[simonvic] read_attributes_raw() \t\t\twrite_result={write_result}")
+                    # If a cached value is present set it as result, which is
+                    # supposedly correct since it has been previously updated
+                    # when the device reported it (e.g. during a movement)
+                    record.value.value = cached_value
                 break
+                self.debug(
+                    f"[simonvic] read_attributes_raw() \t read_records={read_records}")
         return read_records
 
     async def write_attributes(
@@ -112,27 +156,29 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
         manufacturer: int | UndefinedType | None = UNDEFINED,
         **kwargs,
     ) -> list[list[foundation.WriteAttributesStatusRecord]]:
-        self.debug(f"[simonvic] write_attributes attributes={attributes}")
         self.debug(
-            f"[simonvic] \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
+            f"[simonvic] write_attributes attributes={attributes}")
+        self.debug(
+            f"[simonvic] write_attributes \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
         result = await super().write_attributes(attributes, manufacturer, **kwargs)
-        self.debug(f"[simonvic] \t result={result}")
         self.debug(
-            f"[simonvic] \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
+            f"[simonvic] write_attributes \t result={result}")
+        self.debug(
+            f"[simonvic] write_attributes \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
         return result
 
     def _update_attribute(self, attrid, value):
         self.debug(
             f"[simonvic] _update_attribute attrid={attrid} value={value}")
         self.debug(
-            f"[simonvic] \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
-        if attrid == CURRENT_LIFT_PERC_ATTR_ID:
-            self.debug(
-                f"[simonvic] \t inverting value from {value} to {100 - value}")
-            value = 100 - value
+            f"[simonvic] _update_attribute \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
+        # if attrid == CURRENT_LIFT_PERC_ATTR_ID:
+        #     self.debug(
+        #         f"[simonvic] _update_attribute \t inverting value from {value} to {100 - value}")
+        #     value = 100 - value
         super()._update_attribute(attrid, value)
         self.debug(
-            f"[simonvic] \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
+            f"[simonvic] _update_attribute \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
 
     async def command(
         self,
@@ -145,7 +191,7 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
         self.debug(
             f"[simonvic] command command_id={command_id} args={args} expect_reply={expect_reply} tsn={tsn}")
         self.debug(
-            f"[simonvic] \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
+            f"[simonvic] command \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
         if (
             command_id == WindowCovering.ServerCommandDefs.up_open.id
             or command_id == WindowCovering.ServerCommandDefs.down_close.id
@@ -156,19 +202,20 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
             )
             try:
                 is_reversed = success[self.AttributeDefs.tuya_motor_reversal.id]
-                self.debug(f"[simonvic] \tis_reversed={is_reversed}")
+                self.debug(f"[simonvic] command \t is_reversed={is_reversed}")
                 if is_reversed:
                     if command_id == WindowCovering.ServerCommandDefs.up_open.id:
                         command_id = WindowCovering.ServerCommandDefs.down_close.id
                     else:
                         command_id = WindowCovering.ServerCommandDefs.up_open.id
-                    self.debug(f"[simonvic] \t\tnew command_id={command_id}")
+                    self.debug(
+                        f"[simonvic] command \t\t new command_id={command_id}")
             except KeyError:
                 self.debug(
                     "[simonvic] \terror when reading tuya_motor_reversal")
         if command_id == WindowCovering.ServerCommandDefs.go_to_lift_percentage.id:
             self.debug(
-                f"[simonvic] \tInverting percentage command from {args[0]} to {100 - args[0]}")
+                f"[simonvic] command \t Inverting percentage command from {args[0]} to {100 - args[0]}")
             v = (100 - args[0],)
             return await super().command(
                 command_id,
@@ -185,7 +232,7 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
             tsn=tsn,
         )
         self.debug(
-            f"[simonvic] \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
+            f"[simonvic] command \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
         return result
 
 

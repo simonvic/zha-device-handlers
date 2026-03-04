@@ -3,6 +3,7 @@ from typing import Final
 import zigpy.types as t
 
 from zigpy.zcl.clusters.closures import WindowCovering
+from zigpy.zcl import AttributeReportedEvent
 from zigpy.zcl.foundation import ZCLAttributeDef
 from zigpy.quirks import CustomCluster
 from zigpy.quirks.v2 import SensorDeviceClass
@@ -57,6 +58,27 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
             type=t.uint16_t,
         )
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.on_event(
+            AttributeReportedEvent.event_type,
+            self._handle_on_report_event
+        )
+
+    def _handle_on_report_event(
+        self,
+        event: AttributeReportedEvent
+    ) -> None:
+        """
+        When the device reports current lift percentage, update with the
+        inverted value
+        """
+        if event.attribute_id == CURRENT_LIFT_PERC_ATTR_ID:
+            self._update_attribute(
+                CURRENT_LIFT_PERC_ATTR_ID,
+                100 - event.value
+            )
+
     async def read_attributes_raw(
         self,
         attributes,
@@ -65,30 +87,32 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
     ):
         """
         When we try to read the current_position_lift_percentage from the
-        device, if a cached value is present, which is supposedly correct (but
-        still inverted) since it has been previously updated when the device
-        reported it e.g. during a movement, it is written back to the device.
+        device, we invert the result and write back the value to the device.
         """
         read_records = await super().read_attributes_raw(attributes, manufacturer, **kwargs)
         for record in read_records.status_records:
             if record.attrid == CURRENT_LIFT_PERC_ATTR_ID:
                 cached_value = self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)
-                if (
-                    cached_value is not None
-                    and record.value.value != 100 - cached_value
-                ):
-                    await self.write_attributes({
-                        "current_position_lift_percentage": 100 - cached_value
-                    })  # TODO: pass manufacturer?
-                    # TODO: invoking write_attributes causes _update_attributes to be invoked twice; eventually replace with a lower level write
+                if cached_value is None:
+                    # If we don't have a cached value, we can only return the
+                    # value (inverted) read from the device (hoping it is not
+                    # stale)
+                    record.value.value = 100 - record.value.value
+                else:
+                    if record.value.value != (100 - cached_value):
+                        await self.write_attributes(
+                            attributes={
+                                "current_position_lift_percentage": 100 - cached_value
+                            },
+                            update_cache=False,
+                            manufacturer=manufacturer,
+                        )
+                    # If a cached value is present set it as result, which is
+                    # supposedly correct since it has been previously updated
+                    # when the device reported it (e.g. during a movement)
                     record.value.value = cached_value
                 break
         return read_records
-
-    def _update_attribute(self, attrid, value):
-        if attrid == CURRENT_LIFT_PERC_ATTR_ID:
-            value = 100 - value
-        super()._update_attribute(attrid, value)
 
     async def command(
         self,
