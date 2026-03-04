@@ -38,13 +38,25 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
     """
 
     class AttributeDefs(WindowCovering.AttributeDefs):
-        tuya_motor_mode: Final = ZCLAttributeDef(id=0x8000, type=MotorMode)
-        tuya_moving_state: Final = ZCLAttributeDef(id=0xF000, type=MovingState)
-        tuya_calibrated: Final = ZCLAttributeDef(id=0xF001, type=t.enum8)
-        tuya_motor_reversal: Final = ZCLAttributeDef(id=0xF002, type=t.enum8)
+        tuya_motor_mode: Final = ZCLAttributeDef(
+            id=0x8000,
+            type=MotorMode,
+        )
+        tuya_moving_state: Final = ZCLAttributeDef(
+            id=0xF000,
+            type=MovingState,
+        )
+        tuya_calibrated: Final = ZCLAttributeDef(
+            id=0xF001,
+            type=t.enum8,
+        )
+        tuya_motor_reversal: Final = ZCLAttributeDef(
+            id=0xF002,
+            type=t.enum8,
+        )
         tuya_calibration_time: Final = ZCLAttributeDef(
             id=0xF003,
-            type=t.uint16_t
+            type=t.uint16_t,
         )
 
     async def read_attributes_raw(
