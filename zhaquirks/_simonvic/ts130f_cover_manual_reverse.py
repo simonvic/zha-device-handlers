@@ -70,14 +70,28 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
         event: AttributeReportedEvent
     ) -> None:
         """
-        When the device reports current lift percentage, update with the
-        inverted value
+        When the device report `tuya_moving_state` as `IDLE`, it means it has
+        completed its movement; we write the lift percentage back to the device
+
+        NOTE: if the percentage is desynced, a up_open / down_close command
+        could cause the device to continuosly report a percentage change for
+        the configured time of `tuya_calibration_time`, regardless of its real
+        position
         """
-        if event.attribute_id == CURRENT_LIFT_PERC_ATTR_ID:
-            self._update_attribute(
-                CURRENT_LIFT_PERC_ATTR_ID,
-                100 - event.value
-            )
+        if (
+            event.attribute_id == self.AttributeDefs.tuya_moving_state.id
+            and event.value == MovingState.IDLE
+        ):
+            cached_value = self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)
+            if cached_value is not None:
+                self.create_catching_task(
+                    self.write_attributes(
+                        attributes={
+                            "current_position_lift_percentage": 100 - cached_value
+                        },
+                        update_cache=False
+                    )
+                )
 
     async def read_attributes_raw(
         self,
@@ -87,7 +101,7 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
     ):
         """
         When we try to read the current_position_lift_percentage from the
-        device, we invert the result and write back the value to the device.
+        device, we invert the result
         """
         read_records = await super().read_attributes_raw(attributes, manufacturer, **kwargs)
         for record in read_records.status_records:
@@ -99,15 +113,7 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
                     # stale)
                     record.value.value = 100 - record.value.value
                 else:
-                    if record.value.value != (100 - cached_value):
-                        await self.write_attributes(
-                            attributes={
-                                "current_position_lift_percentage": 100 - cached_value
-                            },
-                            update_cache=False,
-                            manufacturer=manufacturer,
-                        )
-                    # If a cached value is present set it as result, which is
+                    # If a cached value is present, set it as result, which is
                     # supposedly correct since it has been previously updated
                     # when the device reported it (e.g. during a movement)
                     record.value.value = cached_value
@@ -122,6 +128,11 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
         expect_reply=True,
         tsn=None
     ):
+        """
+        Invert up_open/down_close command if the devices is configured as
+        reversed.
+        Also, invert percentage when seding a `go_to_lift_percentage` command
+        """
         if (
             command_id == WindowCovering.ServerCommandDefs.up_open.id
             or command_id == WindowCovering.ServerCommandDefs.down_close.id
@@ -139,6 +150,7 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
                         command_id = WindowCovering.ServerCommandDefs.up_open.id
             except KeyError:
                 self.error("Error when reading tuya_motor_reversal")
+        # TODO: check if `is_reversed`?
         if command_id == WindowCovering.ServerCommandDefs.go_to_lift_percentage.id:
             v = (100 - args[0],)
             return await super().command(

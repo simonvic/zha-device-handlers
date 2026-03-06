@@ -76,20 +76,40 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
 
     def _log_on_event(
         self,
-        event: AttributeReadEvent | AttributeReportedEvent | AttributeUpdatedEvent
+        event: AttributeReadEvent | AttributeUpdatedEvent
     ) -> None:
-        self.debug(f"[simonvic] on_event() event={event}")
+        self.info(f"[simonvic] on_event() event={event}")
 
     def _handle_on_report_event(
         self,
         event: AttributeReportedEvent
     ) -> None:
-        self.debug(f"[simonvic] on_event() event={event}")
-        if event.attribute_id == CURRENT_LIFT_PERC_ATTR_ID:
-            self._update_attribute(
-                CURRENT_LIFT_PERC_ATTR_ID,
-                100 - event.value
-            )
+        """
+        When the device report `tuya_moving_state` as `IDLE`, it means it has
+        completed its movement; we write the lift percentage back to the device
+        """
+        self.info(f"[simonvic] on_event() event={event}")
+        if (
+            event.attribute_id == self.AttributeDefs.tuya_moving_state.id
+            and event.value == MovingState.IDLE
+        ):
+            self.info(
+                "[simonvic] on_event() \t writing lift percentage on device")
+            cached_value = self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)
+            self.info(f"[simonvic] on_event() \t cached_value={cached_value}")
+            if cached_value is None:
+                self.info("[simonvic] on_event() \t\t cache miss. Ignoring")
+            else:
+                self.info(f"[simonvic] on_event() \t\t cache hit. Writing 100 - {
+                          cached_value} = {100 - cached_value}")
+                self.create_catching_task(
+                    self.write_attributes(
+                        attributes={
+                            "current_position_lift_percentage": 100 - cached_value
+                        },
+                        update_cache=False
+                    )
+                )
 
     async def read_attributes_raw(
         self,
@@ -101,53 +121,39 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
         When we try to read the current_position_lift_percentage from the
         device, we invert the result and write back the value to the device.
         """
-        self.debug(
+        self.info(
             f"[simonvic] read_attributes_raw() attributes={attributes} manufacturer={manufacturer}")
-        self.debug(
+        self.info(
             f"[simonvic] read_attributes_raw() \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
         read_records = await super().read_attributes_raw(attributes, manufacturer, **kwargs)
-        self.debug(
+        self.info(
             f"[simonvic] read_attributes_raw() \t read_records={read_records}")
-        self.debug(
+        self.info(
             f"[simonvic] read_attributes_raw() \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
         for record in read_records.status_records:
             if record.attrid == CURRENT_LIFT_PERC_ATTR_ID:
-                self.debug(
+                self.info(
                     "[simonvic] read_attributes_raw() \t CURRENT_LIFT_PERC_ATTR_ID found")
-                self.debug(
+                self.info(
                     f"[simonvic] read_attributes_raw() \t read {record.value.value} but inverting it to {100 - record.value.value}")
                 cached_value = self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)
                 if cached_value is None:
                     # If we don't have a cached value, we can only return the
                     # value (inverted) read from the device (hoping it is not
                     # stale)
-                    self.debug(
+                    self.info(
                         f"[simonvic] read_attributes_raw() \t\t cache miss. Returning inverted remote value 100 - {record.value.value} = {100 - record.value.value}")
                     record.value.value = 100 - record.value.value
                 else:
-                    self.debug(
+                    self.info(
                         f"[simonvic] read_attributes_raw() \t\t cache hit {cached_value}")
-                    if record.value.value != (100 - cached_value):
-                        self.debug(
-                            f"[simonvic] read_attributes_raw() \t\t\t record.value.value {record.value.value} != {100 - cached_value} 100 - cached_value")
-                        self.debug(
-                            f"[simonvic] read_attributes_raw() \t\t\t Writing 100 - {cached_value} = {100 - cached_value} to remote")
-                        write_result = await self.write_attributes(
-                            attributes={
-                                "current_position_lift_percentage": 100 - cached_value
-                            },
-                            update_cache=False,
-                            manufacturer=manufacturer,
-                        )
-                        self.debug(
-                            f"[simonvic] read_attributes_raw() \t\t\twrite_result={write_result}")
                     # If a cached value is present set it as result, which is
                     # supposedly correct since it has been previously updated
                     # when the device reported it (e.g. during a movement)
-                    record.value.value = cached_value
+                    record.value.value = 100 - cached_value
                 break
-                self.debug(
-                    f"[simonvic] read_attributes_raw() \t read_records={read_records}")
+        self.info(
+            f"[simonvic] read_attributes_raw() \t read_records={read_records}")
         return read_records
 
     async def write_attributes(
@@ -156,28 +162,28 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
         manufacturer: int | UndefinedType | None = UNDEFINED,
         **kwargs,
     ) -> list[list[foundation.WriteAttributesStatusRecord]]:
-        self.debug(
+        self.info(
             f"[simonvic] write_attributes attributes={attributes}")
-        self.debug(
+        self.info(
             f"[simonvic] write_attributes \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
         result = await super().write_attributes(attributes, manufacturer, **kwargs)
-        self.debug(
+        self.info(
             f"[simonvic] write_attributes \t result={result}")
-        self.debug(
+        self.info(
             f"[simonvic] write_attributes \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
         return result
 
     def _update_attribute(self, attrid, value):
-        self.debug(
+        self.info(
             f"[simonvic] _update_attribute attrid={attrid} value={value}")
-        self.debug(
+        self.info(
             f"[simonvic] _update_attribute \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
-        # if attrid == CURRENT_LIFT_PERC_ATTR_ID:
-        #     self.debug(
-        #         f"[simonvic] _update_attribute \t inverting value from {value} to {100 - value}")
-        #     value = 100 - value
+        if attrid == CURRENT_LIFT_PERC_ATTR_ID:
+            self.info(
+                f"[simonvic] _update_attribute \t inverting value from {value} to {100 - value}")
+            value = 100 - value
         super()._update_attribute(attrid, value)
-        self.debug(
+        self.info(
             f"[simonvic] _update_attribute \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
 
     async def command(
@@ -188,9 +194,9 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
         expect_reply=True,
         tsn=None
     ):
-        self.debug(
+        self.info(
             f"[simonvic] command command_id={command_id} args={args} expect_reply={expect_reply} tsn={tsn}")
-        self.debug(
+        self.info(
             f"[simonvic] command \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
         if (
             command_id == WindowCovering.ServerCommandDefs.up_open.id
@@ -202,19 +208,19 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
             )
             try:
                 is_reversed = success[self.AttributeDefs.tuya_motor_reversal.id]
-                self.debug(f"[simonvic] command \t is_reversed={is_reversed}")
+                self.info(f"[simonvic] command \t is_reversed={is_reversed}")
                 if is_reversed:
                     if command_id == WindowCovering.ServerCommandDefs.up_open.id:
                         command_id = WindowCovering.ServerCommandDefs.down_close.id
                     else:
                         command_id = WindowCovering.ServerCommandDefs.up_open.id
-                    self.debug(
+                    self.info(
                         f"[simonvic] command \t\t new command_id={command_id}")
             except KeyError:
-                self.debug(
+                self.info(
                     "[simonvic] \terror when reading tuya_motor_reversal")
         if command_id == WindowCovering.ServerCommandDefs.go_to_lift_percentage.id:
-            self.debug(
+            self.info(
                 f"[simonvic] command \t Inverting percentage command from {args[0]} to {100 - args[0]}")
             v = (100 - args[0],)
             return await super().command(
@@ -231,7 +237,7 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
             expect_reply=expect_reply,
             tsn=tsn,
         )
-        self.debug(
+        self.info(
             f"[simonvic] command \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
         return result
 
