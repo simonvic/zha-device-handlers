@@ -93,32 +93,13 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
                     )
                 )
 
-    async def read_attributes_raw(
-        self,
-        attributes,
-        manufacturer=None,
-        **kwargs
-    ):
+    def _update_attribute(self, attrid, value):
         """
-        When we try to read the current_position_lift_percentage from the
-        device, we invert the result
+        Invert read/reported current_position_lift_percentage value
         """
-        read_records = await super().read_attributes_raw(attributes, manufacturer, **kwargs)
-        for record in read_records.status_records:
-            if record.attrid == CURRENT_LIFT_PERC_ATTR_ID:
-                cached_value = self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)
-                if cached_value is None:
-                    # If we don't have a cached value, we can only return the
-                    # value (inverted) read from the device (hoping it is not
-                    # stale)
-                    record.value.value = 100 - record.value.value
-                else:
-                    # If a cached value is present, set it as result, which is
-                    # supposedly correct since it has been previously updated
-                    # when the device reported it (e.g. during a movement)
-                    record.value.value = cached_value
-                break
-        return read_records
+        if attrid == CURRENT_LIFT_PERC_ATTR_ID:
+            value = 100 - value
+        super()._update_attribute(attrid, value)
 
     async def command(
         self,

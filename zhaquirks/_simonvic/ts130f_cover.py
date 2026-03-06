@@ -1,10 +1,9 @@
-from typing import Final, Any
+from typing import Final
 
 import zigpy.types as t
-from zigpy.typing import UNDEFINED, UndefinedType
 
 from zigpy.zcl.clusters.closures import WindowCovering
-from zigpy.zcl import foundation, AttributeReadEvent, AttributeReportedEvent, AttributeUpdatedEvent
+from zigpy.zcl import AttributeReportedEvent
 from zigpy.zcl.foundation import ZCLAttributeDef
 from zigpy.quirks import CustomCluster
 from zigpy.quirks.v2 import SensorDeviceClass
@@ -62,43 +61,37 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.on_event(
-            AttributeReadEvent.event_type,
-            self._log_on_event
-        )
-        self.on_event(
             AttributeReportedEvent.event_type,
-            self._handle_attribute_report
-        )
-        self.on_event(
-            AttributeUpdatedEvent.event_type,
-            self._log_on_event
+            self._handle_on_report_event
         )
 
-    def _log_on_event(
-        self,
-        event: AttributeReadEvent | AttributeUpdatedEvent
-    ) -> None:
-        self.info(f"[simonvic] on_event() event={event}")
-
-    def _handle_attribute_report(
+    def _handle_on_report_event(
         self,
         event: AttributeReportedEvent
     ) -> None:
-        self.info(f"[simonvic] on_event() event={event}")
+        """
+        When the device report `tuya_moving_state` as `IDLE`, it means it has
+        completed its movement; we write the lift percentage back to the device
+
+        NOTE: if the percentage is desynced, a up_open / down_close command
+        could cause the device to continuosly report a percentage change for
+        the configured time of `tuya_calibration_time`, regardless of its real
+        position
+        """
         if (
             event.attribute_id == self.AttributeDefs.tuya_moving_state.id
             and event.value == MovingState.IDLE
         ):
-            self.info("[simonvic] on_event() \t writing lift percentage on device")
             cached_value = self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)
-            self.info(f"[simonvic] on_event() \t cached_value={cached_value}")
-            if cached_value is None:
-                self.info("[simonvic] on_event() \t\t cache miss. Ignoring")
-            else:
-                self.info(f"[simonvic] on_event() \t\t cache hit. Writing 100 - {cached_value} = {100 - cached_value}")
-                self.create_catching_task(self.write_attributes({
-                    "current_position_lift_percentage": 100 - cached_value
-                }))
+            if cached_value is not None:
+                self.create_catching_task(
+                    self.write_attributes(
+                        attributes={
+                            "current_position_lift_percentage": 100 - cached_value
+                        },
+                        update_cache=False
+                    )
+                )
 
     async def read_attributes_raw(
         self,
@@ -108,72 +101,24 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
     ):
         """
         When we try to read the current_position_lift_percentage from the
-        device, we invert the result and write back the value to the device.
+        device, we invert the result
         """
-        self.info(
-            f"[simonvic] read_attributes_raw() attributes={attributes} manufacturer={manufacturer}")
-        self.info(
-            f"[simonvic] read_attributes_raw() \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
         read_records = await super().read_attributes_raw(attributes, manufacturer, **kwargs)
-        self.info(
-            f"[simonvic] read_attributes_raw() \t read_records={read_records}")
-        self.info(
-            f"[simonvic] read_attributes_raw() \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
         for record in read_records.status_records:
             if record.attrid == CURRENT_LIFT_PERC_ATTR_ID:
-                self.info(
-                    "[simonvic] read_attributes_raw() \t CURRENT_LIFT_PERC_ATTR_ID found")
-                self.info(
-                    f"[simonvic] read_attributes_raw() \t read {record.value.value} but inverting it to {100 - record.value.value}")
                 cached_value = self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)
                 if cached_value is None:
                     # If we don't have a cached value, we can only return the
                     # value (inverted) read from the device (hoping it is not
                     # stale)
-                    self.info(
-                        f"[simonvic] read_attributes_raw() \t\t cache miss. Returning inverted remote value 100 - {record.value.value} = {100 - record.value.value}")
                     record.value.value = 100 - record.value.value
                 else:
-                    self.info(
-                        f"[simonvic] read_attributes_raw() \t\t cache hit {cached_value}")
-                    # If a cached value is present set it as result, which is
+                    # If a cached value is present, set it as result, which is
                     # supposedly correct since it has been previously updated
                     # when the device reported it (e.g. during a movement)
-                    record.value.value = 100 - cached_value
+                    record.value.value = cached_value
                 break
-        self.info(
-            f"[simonvic] read_attributes_raw() \t read_records={read_records}")
         return read_records
-
-    async def write_attributes(
-        self,
-        attributes: dict[str | int | foundation.ZCLAttributeDef, Any],
-        manufacturer: int | UndefinedType | None = UNDEFINED,
-        **kwargs,
-    ) -> list[list[foundation.WriteAttributesStatusRecord]]:
-        self.info(
-            f"[simonvic] write_attributes attributes={attributes}")
-        self.info(
-            f"[simonvic] write_attributes \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
-        result = await super().write_attributes(attributes, manufacturer, **kwargs)
-        self.info(
-            f"[simonvic] write_attributes \t result={result}")
-        self.info(
-            f"[simonvic] write_attributes \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
-        return result
-
-    def _update_attribute(self, attrid, value):
-        self.info(
-            f"[simonvic] _update_attribute attrid={attrid} value={value}")
-        self.info(
-            f"[simonvic] _update_attribute \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
-        if attrid == CURRENT_LIFT_PERC_ATTR_ID:
-            self.info(
-                f"[simonvic] _update_attribute \t inverting value from {value} to {100 - value}")
-            value = 100 - value
-        super()._update_attribute(attrid, value)
-        self.info(
-            f"[simonvic] _update_attribute \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
 
     async def command(
         self,
@@ -183,10 +128,11 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
         expect_reply=True,
         tsn=None
     ):
-        self.info(
-            f"[simonvic] command command_id={command_id} args={args} expect_reply={expect_reply} tsn={tsn}")
-        self.info(
-            f"[simonvic] command \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
+        """
+        Invert up_open/down_close command if the devices is configured as
+        reversed.
+        Also, invert percentage when seding a `go_to_lift_percentage` command
+        """
         if (
             command_id == WindowCovering.ServerCommandDefs.up_open.id
             or command_id == WindowCovering.ServerCommandDefs.down_close.id
@@ -197,20 +143,15 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
             )
             try:
                 is_reversed = success[self.AttributeDefs.tuya_motor_reversal.id]
-                self.info(f"[simonvic] command \t is_reversed={is_reversed}")
                 if is_reversed:
                     if command_id == WindowCovering.ServerCommandDefs.up_open.id:
                         command_id = WindowCovering.ServerCommandDefs.down_close.id
                     else:
                         command_id = WindowCovering.ServerCommandDefs.up_open.id
-                    self.info(
-                        f"[simonvic] command \t\t new command_id={command_id}")
             except KeyError:
-                self.info(
-                    "[simonvic] \terror when reading tuya_motor_reversal")
+                self.error("Error when reading tuya_motor_reversal")
+        # TODO: check if `is_reversed`?
         if command_id == WindowCovering.ServerCommandDefs.go_to_lift_percentage.id:
-            self.info(
-                f"[simonvic] command \t Inverting percentage command from {args[0]} to {100 - args[0]}")
             v = (100 - args[0],)
             return await super().command(
                 command_id,
@@ -219,16 +160,13 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
                 expect_reply=expect_reply,
                 tsn=tsn
             )
-        result = await super().command(
+        return await super().command(
             command_id,
             *args,
             manufacturer=manufacturer,
             expect_reply=expect_reply,
             tsn=tsn,
         )
-        self.info(
-            f"[simonvic] command \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
-        return result
 
 
 (

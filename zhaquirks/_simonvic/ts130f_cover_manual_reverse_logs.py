@@ -130,30 +130,6 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
             f"[simonvic] read_attributes_raw() \t read_records={read_records}")
         self.info(
             f"[simonvic] read_attributes_raw() \t cached percent={self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)}")
-        for record in read_records.status_records:
-            if record.attrid == CURRENT_LIFT_PERC_ATTR_ID:
-                self.info(
-                    "[simonvic] read_attributes_raw() \t CURRENT_LIFT_PERC_ATTR_ID found")
-                self.info(
-                    f"[simonvic] read_attributes_raw() \t read {record.value.value} but inverting it to {100 - record.value.value}")
-                cached_value = self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)
-                if cached_value is None:
-                    # If we don't have a cached value, we can only return the
-                    # value (inverted) read from the device (hoping it is not
-                    # stale)
-                    self.info(
-                        f"[simonvic] read_attributes_raw() \t\t cache miss. Returning inverted remote value 100 - {record.value.value} = {100 - record.value.value}")
-                    record.value.value = 100 - record.value.value
-                else:
-                    self.info(
-                        f"[simonvic] read_attributes_raw() \t\t cache hit {cached_value}")
-                    # If a cached value is present set it as result, which is
-                    # supposedly correct since it has been previously updated
-                    # when the device reported it (e.g. during a movement)
-                    record.value.value = 100 - cached_value
-                break
-        self.info(
-            f"[simonvic] read_attributes_raw() \t read_records={read_records}")
         return read_records
 
     async def write_attributes(
