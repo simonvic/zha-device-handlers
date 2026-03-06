@@ -183,11 +183,13 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
         cluster_id=TuyaCoveringCluster.cluster_id,
         min_value=1,
         max_value=1500,  # A sensible max?
-        step=1,
+        step=0.1,
+        multiplier=0.1,
         unit=UnitOfTime.SECONDS,
         device_class=NumberDeviceClass.DURATION,
         translation_key="calibration_vertical_run_time_up",
         fallback_name="Calibration vertical run time up",
+        # initially_disabled=True,
     )
     .switch(
         attribute_name=TuyaCoveringCluster.AttributeDefs.tuya_motor_reversal.name,
@@ -200,6 +202,7 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
         cluster_id=TuyaCoveringCluster.cluster_id,
         translation_key="calibrated",
         fallback_name="Calibrated",
+        # initially_disabled=True,
     )
     .sensor(
         attribute_name=TuyaCoveringCluster.AttributeDefs.tuya_moving_state.name,
@@ -210,8 +213,8 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
             MovingState.IDLE: "Idle",
             MovingState.CLOSING: "Closing"
         }[x],
-        # state_class=SensorStateClass.MEASUREMENT,
         fallback_name="Moving state"
+        # initially_disabled=True,
     )
     # .skip_configuration()
     .add_to_registry()
