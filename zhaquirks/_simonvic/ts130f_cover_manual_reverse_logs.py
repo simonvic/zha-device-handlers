@@ -119,7 +119,7 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
     ):
         """
         When we try to read the current_position_lift_percentage from the
-        device, we invert the result and write back the value to the device.
+        device, we invert the result.
         """
         self.info(
             f"[simonvic] read_attributes_raw() attributes={attributes} manufacturer={manufacturer}")
