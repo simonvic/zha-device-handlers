@@ -1,5 +1,6 @@
 from typing import Final
 
+import asyncio
 import zigpy.types as t
 
 from zigpy.zcl.clusters.closures import WindowCovering
@@ -25,6 +26,7 @@ class MovingState(t.enum8):
 
 
 CURRENT_LIFT_PERC_ATTR_ID = WindowCovering.AttributeDefs.current_position_lift_percentage.id
+WRITE_DELAY_S = 3
 
 
 class TuyaCoveringCluster(CustomCluster, WindowCovering):
@@ -74,24 +76,31 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
         completed its movement; we write the lift percentage back to the device
 
         NOTE: if the percentage is desynced, a up_open / down_close command
-        could cause the device to continuosly report a percentage change for
-        the configured time of `tuya_calibration_time`, regardless of its real
-        position
+        could cause the device to continuously report a percentage change
+        regardless of its real position.
+        If the device is fully open, it will continuously report a percentage
+        of 99%; after the configured `tuya_calibration_time` has passed, it
+        will report 100% and `tuya_moving_state` as `IDLE`; if a `stop` command
+        is issued before the `tuya_calibration_time` has passed, the device
+        won't report percentage as 100%. Same applies when the cover is fully
+        closed.
         """
         if (
             event.attribute_id == self.AttributeDefs.tuya_moving_state.id
             and event.value == MovingState.IDLE
         ):
-            cached_value = self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)
-            if cached_value is not None:
-                self.create_catching_task(
-                    self.write_attributes(
-                        attributes={
-                            "current_position_lift_percentage": 100 - cached_value
-                        },
-                        update_cache=False
-                    )
-                )
+            self.create_catching_task(self._write_lift_percentage())
+
+    async def _write_lift_percentage(self):
+        await asyncio.sleep(WRITE_DELAY_S)
+        cached_value = self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)
+        if cached_value is not None:
+            await self.write_attributes(
+                attributes={
+                    "current_position_lift_percentage": 100 - cached_value
+                },
+                update_cache=False
+            )
 
     def _update_attribute(self, attrid, value):
         """

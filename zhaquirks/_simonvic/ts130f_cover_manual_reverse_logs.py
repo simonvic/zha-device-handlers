@@ -1,5 +1,6 @@
 from typing import Final, Any
 
+import asyncio
 import zigpy.types as t
 from zigpy.typing import UNDEFINED, UndefinedType
 
@@ -26,16 +27,10 @@ class MovingState(t.enum8):
 
 
 CURRENT_LIFT_PERC_ATTR_ID = WindowCovering.AttributeDefs.current_position_lift_percentage.id
+WRITE_DELAY_S = 3
 
 
 class TuyaCoveringCluster(CustomCluster, WindowCovering):
-    """
-    Tuya covering cluster that manually writes the
-    current_position_lift_percentage back to the device.
-    While for home assistant 0=open and 100=closed, for the device 0=closed and
-    100=open; therefore the percentage value is inverted when reading/writing
-    it from/to the device, and when sending the go_to_lift_percentage command
-    """
 
     class AttributeDefs(WindowCovering.AttributeDefs):
         tuya_motor_mode: Final = ZCLAttributeDef(
@@ -84,32 +79,32 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
         self,
         event: AttributeReportedEvent
     ) -> None:
-        """
-        When the device report `tuya_moving_state` as `IDLE`, it means it has
-        completed its movement; we write the lift percentage back to the device
-        """
         self.info(f"[simonvic] on_event() event={event}")
         if (
             event.attribute_id == self.AttributeDefs.tuya_moving_state.id
             and event.value == MovingState.IDLE
         ):
             self.info(
-                "[simonvic] on_event() \t writing lift percentage on device")
-            cached_value = self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)
-            self.info(f"[simonvic] on_event() \t cached_value={cached_value}")
-            if cached_value is None:
-                self.info("[simonvic] on_event() \t\t cache miss. Ignoring")
-            else:
-                self.info(f"[simonvic] on_event() \t\t cache hit. Writing 100 - {
-                          cached_value} = {100 - cached_value}")
-                self.create_catching_task(
-                    self.write_attributes(
-                        attributes={
-                            "current_position_lift_percentage": 100 - cached_value
-                        },
-                        update_cache=False
-                    )
-                )
+                "[simonvic] on_event() \t moving state reported as IDLE. Creating write task")
+            self.create_catching_task(self._write_lift_percentage())
+
+    async def _write_lift_percentage(self):
+        self.info("[simonvic] _write_lift_percentage()")
+        self.info(
+            f"[simonvic] _write_lift_percentage() \t sleeping for {WRITE_DELAY_S}")
+        await asyncio.sleep(WRITE_DELAY_S)
+        cached_value = self._attr_cache.get(CURRENT_LIFT_PERC_ATTR_ID)
+        self.info(
+            f"[simonvic] _write_lift_percentage() \t cached_value={cached_value}")
+        if cached_value is not None:
+            self.info(
+                "[simonvic] _write_lift_percentage() \t\t cache_hit. Writing...")
+            await self.write_attributes(
+                attributes={
+                    "current_position_lift_percentage": 100 - cached_value
+                },
+                update_cache=False
+            )
 
     async def read_attributes_raw(
         self,
