@@ -3,26 +3,24 @@ from typing import Final
 import asyncio
 import zigpy.types as t
 
-from zigpy.zcl.clusters.closures import WindowCovering
 from zigpy.zcl import AttributeReportedEvent
 from zigpy.zcl.foundation import ZCLAttributeDef
+from zigpy.zcl.clusters.closures import WindowCovering
 from zigpy.quirks import CustomCluster
-from zigpy.quirks.v2 import SensorDeviceClass
+from zigpy.quirks.v2 import QuirkBuilder, EntityType, EntityPlatform
 from zigpy.quirks.v2.homeassistant import UnitOfTime
 from zigpy.quirks.v2.homeassistant.number import NumberDeviceClass
 
-from zhaquirks.tuya.builder import TuyaQuirkBuilder
-
 
 class MotorMode(t.enum8):
-    STRONG_MOTOR = 0x00
-    WEAK_MOTOR = 0x01
+    Strong = 0x00
+    Weak = 0x01
 
 
-class MovingState(t.enum8):
-    OPENING = 0x00
-    IDLE = 0x01
-    CLOSING = 0x02
+class MotorState(t.enum8):
+    Opening = 0x00
+    Idle = 0x01
+    Closing = 0x02
 
 
 CURRENT_LIFT_PERC_ATTR_ID = WindowCovering.AttributeDefs.current_position_lift_percentage.id
@@ -43,9 +41,9 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
             id=0x8000,
             type=MotorMode,
         )
-        tuya_moving_state: Final = ZCLAttributeDef(
+        tuya_motor_state: Final = ZCLAttributeDef(
             id=0xF000,
-            type=MovingState,
+            type=MotorState,
         )
         tuya_calibrated: Final = ZCLAttributeDef(
             id=0xF001,
@@ -72,7 +70,7 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
         event: AttributeReportedEvent
     ) -> None:
         """
-        When the device report `tuya_moving_state` as `IDLE`, it means it has
+        When the device report `tuya_motor_state` as `IDLE`, it means it has
         completed its movement; we write the lift percentage back to the device
 
         NOTE: if the percentage is desynced, a up_open / down_close command
@@ -80,14 +78,14 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
         regardless of its real position.
         If the device is fully open, it will continuously report a percentage
         of 99%; after the configured `tuya_calibration_time` has passed, it
-        will report 100% and `tuya_moving_state` as `IDLE`; if a `stop` command
+        will report 100% and `tuya_motor_state` as `IDLE`; if a `stop` command
         is issued before the `tuya_calibration_time` has passed, the device
         won't report percentage as 100%. Same applies when the cover is fully
         closed.
         """
         if (
-            event.attribute_id == self.AttributeDefs.tuya_moving_state.id
-            and event.value == MovingState.IDLE
+            event.attribute_id == self.AttributeDefs.tuya_motor_state.id
+            and event.value == MotorState.Idle
         ):
             self.create_catching_task(self._write_lift_percentage())
 
@@ -142,6 +140,7 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
                 self.error("Error when reading tuya_motor_reversal")
         # TODO: check if `is_reversed`?
         if command_id == WindowCovering.ServerCommandDefs.go_to_lift_percentage.id:
+            # TODO: possible issue but unable to reproduce https://github.com/zigpy/zha-device-handlers/issues/2676#issuecomment-5284034085
             v = (100 - args[0],)
             return await super().command(
                 command_id,
@@ -160,8 +159,8 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
 
 
 (
-    # TODO: use QuirkBuilder instead?
-    TuyaQuirkBuilder("_TZ3210_dwytrmda", "TS130F")
+    QuirkBuilder("_TZ3210_dwytrmda", "TS130F")
+    # .applies_to("_TZ3000_eg7awg6a", "TS130F")
     .replaces(TuyaCoveringCluster)
     .number(
         attribute_name=TuyaCoveringCluster.AttributeDefs.tuya_calibration_time.name,
@@ -189,18 +188,14 @@ class TuyaCoveringCluster(CustomCluster, WindowCovering):
         fallback_name="Calibrated",
         # initially_disabled=True,
     )
-    .sensor(
-        attribute_name=TuyaCoveringCluster.AttributeDefs.tuya_moving_state.name,
+    .enum(
+        attribute_name=TuyaCoveringCluster.AttributeDefs.tuya_motor_state.name,
         cluster_id=TuyaCoveringCluster.cluster_id,
-        device_class=SensorDeviceClass.ENUM,
-        attribute_converter=lambda x: {
-            MovingState.OPENING: "Opening",
-            MovingState.IDLE: "Idle",
-            MovingState.CLOSING: "Closing"
-        }[x],
-        fallback_name="Moving state"
-        # initially_disabled=True,
+        enum_class=MotorState,
+        entity_type=EntityType.STANDARD,
+        entity_platform=EntityPlatform.SENSOR,
+        translation_key="motor_state",
+        fallback_name="Motor state"
     )
-    # .skip_configuration()
     .add_to_registry()
 )
